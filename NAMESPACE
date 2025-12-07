@@ -1,3 +1,4 @@
 exportPattern("^[[:alpha:]]+")
 importFrom(Rcpp, evalCpp)
-useDynLib(M2DSAlgoProject, .registration = TRUE)
+useDynLib(M2DSAlgoProject_SGL, .registration = TRUE)
+
