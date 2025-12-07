@@ -1,4 +1,4 @@
-Package: M2DSAlgoProject
+Package: M2DSAlgoProject_SGL
 Type: Package
 Title: Change Point Detection
 Version: 0.1.0
@@ -15,5 +15,6 @@ LazyData: true
 Imports: Rcpp (>= 1.1.0)
 LinkingTo: Rcpp, RcppEigen
 RoxygenNote: 7.3.3
+
 
 
