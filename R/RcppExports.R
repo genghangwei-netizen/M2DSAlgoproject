@@ -13,7 +13,4 @@ dp_changepoint_pelt_cpp <- function(data, beta) {
     .Call(`_M2DSAlgoProject_dp_changepoint_pelt_cpp`, data, beta)
 }
 
-rcpp_hello <- function() {
-    .Call(`_M2DSAlgoProject_rcpp_hello`)
-}
 
