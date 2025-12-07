@@ -55,22 +55,11 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// rcpp_hello
-List rcpp_hello();
-RcppExport SEXP _M2DSAlgoProject_rcpp_hello() {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    rcpp_result_gen = Rcpp::wrap(rcpp_hello());
-    return rcpp_result_gen;
-END_RCPP
-}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_M2DSAlgoProject_kernel_change_point_cpp", (DL_FUNC) &_M2DSAlgoProject_kernel_change_point_cpp, 10},
     {"_M2DSAlgoProject_dp_changepoint_cpp", (DL_FUNC) &_M2DSAlgoProject_dp_changepoint_cpp, 2},
     {"_M2DSAlgoProject_dp_changepoint_pelt_cpp", (DL_FUNC) &_M2DSAlgoProject_dp_changepoint_pelt_cpp, 2},
-    {"_M2DSAlgoProject_rcpp_hello", (DL_FUNC) &_M2DSAlgoProject_rcpp_hello, 0},
     {NULL, NULL, 0}
 };
 
@@ -78,3 +67,4 @@ RcppExport void R_init_M2DSAlgoProject(DllInfo *dll) {
     R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
     R_useDynamicSymbols(dll, FALSE);
 }
+
