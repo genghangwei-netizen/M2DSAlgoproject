@@ -1,0 +1,17 @@
+Package: M2DSAlgoProject
+Type: Package
+Title: Change Point Detection
+Version: 0.1.0
+Authors@R: c(
+    person("Ketong", "SU", 
+           email = "20240162@etud.univ-evry.fr", 
+           role = c("aut", "cre"))
+  )
+Description: This package implements three algorithms (naive, dynamic programming, and optimized) 
+    in R and Rcpp for change point detection in time series, as the M2 Data Science Algorithmique course project.
+License: MIT
+Encoding: UTF-8
+LazyData: true
+Imports: Rcpp (>= 1.1.0)
+LinkingTo: Rcpp, RcppEigen
+RoxygenNote: 7.3.3

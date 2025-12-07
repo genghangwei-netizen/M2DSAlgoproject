@@ -1,0 +1,1571 @@
+---
+title: "Rapport Algo"
+author: "Louis Monier"
+date: "2025-12-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+devtools::load_all(".")
+library(tidyverse)
+library(mlbench)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+library(parallel)
+```
+
+
+# I. Solution 1: change in mean dp
+
+## A. Data Preparation and Testing
+
+# We generate a sequence containing a known change point (T=500) to test the dp_auto_beta function.
+```{r}
+
+#library(M2DSAlgoProject)
+
+set.seed(123)
+T_data <- 500
+# Mean changes from 5 to 10
+data_test <- c(rnorm(250, mean = 5, sd = 1), 
+               rnorm(250, mean = 10, sd = 1))
+
+message(paste("Test data length T =", T_data))
+
+# Perform penalty analysis and visualization (Scanning Beta from 0.5 to 15)
+dp_plot_penalty_analysis(data = data_test, max_beta_scan = 15)
+
+# --- Select Beta via Observation or IC ---
+
+# Run automatic detection using BIC
+result_bic <- dp_auto_beta(data = data_test, penalty_type = "BIC")
+
+# Print final conclusions
+message("--- Final Change Point Detection (Penalty) ---")
+print(paste("Optimal Cost (Q_T):", round(result_bic$cost, 2)))
+print(paste("Optimal K:", result_bic$K_opt))
+print(paste("Change Point Positions:", paste(result_bic$changepoints, collapse = ", ")))
+
+# Visualize final results
+plot(data_test, type = 'l', 
+     main = paste("Final Segmentation (K=", result_bic$K_opt, ")"),
+     xlab = "Time Index", ylab = "Data Value")
+abline(v = result_bic$changepoints, col = "red", lty = 2, lwd = 2)
+```
+
+
+```{r}
+
+# ---Pruned Dynamic Programming (PELT) Performance Comparison ---
+
+# 1. Retrieve the determined Beta value
+T_current <- length(data_test)
+# BIC Beta Formula (assuming p=1): log(T)
+beta_bic <- log(T_current) 
+
+message(paste("--- Change Point Detection Algorithm Performance Comparison (T =", T_current, ") ---"))
+message(paste("Using Penalty Beta (BIC: log(T)) =", round(beta_bic, 4)))
+
+# --- 1. Naive DP (O(T^2)) ---
+# Measure the execution time of the original O(T^2) function
+message("Measuring Naive DP O(T^2) execution time...")
+# Note: Ensure your dp_changepoint function is loaded
+time_dp <- time_function_call(
+  dp_changepoint(data = data_test, beta = beta_bic)
+)
+
+# --- 2. Pruned DP (PELT, Average O(T)) ---
+# Measure the execution time of the function with PELT pruning
+message("Measuring Pruned PELT DP O(T) execution time...")
+# Note: Ensure your dp_changepoint_pelt function is loaded
+time_pelt <- time_function_call(
+  dp_changepoint_pelt(data = data_test, beta = beta_bic)
+)
+
+# --- 3. Result Summary ---
+message("\n--- Execution Time Comparison (Unit: milliseconds ms) ---")
+time_results <- data.frame(
+  Algorithm = c("Naive DP (O(T^2))", "Pruned PELT DP (Avg. O(T))"),
+  Time_ms = c(time_dp$time_ms, time_pelt$time_ms),
+  Optimal_K = c(time_dp$result$K_opt, time_pelt$result$K_opt),
+  stringsAsFactors = FALSE
+)
+
+# Print the table result
+print(time_results)
+
+# Print the speedup factor
+message(paste("\nPELT Speedup Factor:", round(time_dp$time_ms / time_pelt$time_ms, 2), "x"))
+
+# Verify if the results of the two algorithms are identical (K and Cost should be the same)
+is_optimal_solution_equal <- time_dp$result$K_opt == time_pelt$result$K_opt && 
+                            all.equal(time_dp$result$cost, time_pelt$result$cost)
+
+if (is_optimal_solution_equal) {
+  message("ptimal solution (K and Cost) from both algorithms is identical. PELT successfully accelerates while maintaining optimality.")
+} else {
+  warning("Warning: Optimal solutions found by the two algorithms are not identical. Please check the implementation.")
+}
+```
+
+```{r}
+# --- 1. Data loading and cleaning ---
+data_france <- read.csv("France.csv", header = TRUE, stringsAsFactors = FALSE)
+
+# Assume the price column name is 'Price' (replace with the actual column name in your CSV if different)
+price_column_name <- "Price"
+
+# Check that the column exists
+if (!(price_column_name %in% names(data_france))) {
+    stop(paste("ERROR: Column name '", price_column_name, "' not found in CSV.", sep = ""))
+}
+
+# 1. Clean raw price: remove thousand separators, currency symbols, and extra spaces
+price_raw_clean <- gsub(",", "", data_france[[price_column_name]])
+price_raw_clean <- trimws(price_raw_clean)
+
+# 2. Convert to numeric
+price_series_raw <- as.numeric(price_raw_clean)
+
+# 3. Remove NAs created by coercion or missing values
+price_series_clean <- price_series_raw[!is.na(price_series_raw)]
+
+# --- 4. Truncate / assign to target series ---
+T_target <- 200
+if (length(price_series_clean) > T_target) {
+    price_series <- price_series_clean[1:T_target]
+    message(paste("Data successfully loaded and trimmed to T =", length(price_series), "data points."))
+} else {
+    price_series <- price_series_clean
+    message(paste("Using full data length T =", length(price_series), "data points."))
+}
+
+# --- 5. Final sanity check ---
+if (length(price_series) == 0) {
+    stop("ERROR: The processed price_series vector is empty. Check your CSV file for data quality.")
+}
+
+# --- 6. Visualization of the series ---
+plot(price_series, type = "l",
+     main = paste("France Price Series (T=", length(price_series), ")"),
+     xlab = "Time Index",
+     ylab = "Price Value")
+
+# Penalty scan and diagnostic plots
+dp_plot_penalty_analysis(data = price_series, max_beta_scan = 30)
+
+# Choose beta by visual inspection / HighNoise rule ----------------------------
+
+# Use the automatic penalty selection function
+result_bic <- dp_auto_beta(data = price_series, penalty_type = "HighNoise")
+
+# Print final summary
+message("--- Final Change Point Detection (Penalty) ---")
+print(paste("Optimal Cost (Q_T):", round(result_bic$cost, 2)))
+print(paste("Optimal K:", result_bic$K_opt))
+print(paste("Change Point Positions:", paste(result_bic$changepoints, collapse = ", ")))
+
+# Visualize final segmentation
+plot(price_series, type = "l",
+     main = paste("Final Segmentation (K=", result_bic$K_opt, ")"),
+     xlab = "Time Index", ylab = "Data Value")
+abline(v = result_bic$changepoints, col = "red", lty = 2, lwd = 2)
+
+```
+
+# These results show that although the theoretical complexity of the PELT algorithm is O(T),
+# the actual runtime heavily depends on the data — specifically on the density of true changepoints.
+#
+# High changepoint density (Figure 2, K = 18):
+#   Pruning is highly effective, and the runtime is far below the theoretical worst case.
+#
+# Low changepoint density (Figure 1, K = 1):
+#   Pruning becomes less effective, and the runtime approaches the O(T^2) worst case.
+#   As a result, when T increases, the speedup factor appears more conservative.
+
+
+
+**Solution 2: change in RKHS**
+
+## Background
+
+We consider a time series $X_1, \dots, X_n$, and aim to detect segment boundaries where the mean element in the characteristic Hilbert space $\mathcal{H}$ changes.
+The data is mapped to the Hilbert space via the feature map $\Phi(\cdot)$, and the kernel function is defined by the inner product: $k(x, y) = \langle \Phi(x), \Phi(y) \rangle_{\mathcal{H}}$.
+
+For a given segment $[i, j]$, the cost function, representing the empirical risk (or kernelized least-squares), is the sum of squared errors between the data embedding and the empirical mean element $\bar{\Phi}_{i:j}$:
+
+$$
+\text{Cost}([i, j]) = \sum_{t=i}^{j} \Vert \Phi(X_t) - \bar{\Phi}_{i:j} \Vert^2
+$$
+
+where the empirical mean element is $\bar{\Phi}_{i:j} = \frac{1}{j - i + 1} \sum_{t=i}^{j} \Phi(X_t)$.
+
+The goal is to simplify this cost using the kernel trick, so it depends only on kernel evaluations $k(X_p, X_q)$.
+
+Derivation of the Kernelized Cost Function:
+
+$$
+\begin{aligned}
+\sum_{t=i}^{j} \Vert \Phi(X_t) - \bar{\Phi}_{i:j} \Vert^2 &= \sum_{t=i}^{j} \left( k(X_t, X_t) - 2\langle \Phi(X_t), \bar{\Phi} \rangle + \Vert \bar{\Phi} \Vert^2 \right) \quad \text{where } m = j-i+1 \text{ and } \bar{\Phi} = \bar{\Phi}_{i:j} \\
+&= \sum_{t=i}^{j} k(X_t, X_t) - 2 \sum_{t=i}^{j} \left( \frac{1}{m} \sum_{s=i}^{j} k(X_t, X_s) \right) + (j-i+1) \left( \frac{1}{m^2} \sum_{p=i}^{j} \sum_{q=i}^{j} k(X_p, X_q) \right) \\
+&= \sum_{t=i}^{j} k(X_t, X_t) - 2 \left( \frac{1}{m} \sum_{p=i}^{j} \sum_{q=i}^{j} k(X_p, X_q) \right) + m \left( \frac{1}{m^2} \sum_{p=i}^{j} \sum_{q=i}^{j} k(X_p, X_q) \right) \\
+&= \sum_{t=i}^{j} k(X_t, X_t) + \left( -2 + \frac{m}{m^2} \cdot m \right) \left( \frac{1}{m} \sum_{p=i}^{j} \sum_{q=i}^{j} k(X_p, X_q) \right) \\
+&= \sum_{t=i}^{j} k(X_t, X_t) + \left( -2 + 1 \right) \left( \frac{1}{m} \sum_{p=i}^{j} \sum_{q=i}^{j} k(X_p, X_q) \right) \\
+&= \sum_{t=i}^{j} k(X_t, X_t) - \frac{1}{j - i + 1} \sum_{p=i}^{j} \sum_{q=i}^{j} k(X_p, X_q)
+\end{aligned}
+$$
+
+
+
+Complexity:
+
+The naive Dynamic Programming for change point detection in RKHS (Kernel Methods) typically requires $O((t-s)^2)$ time to compute the segment cost $C(y_{s+1}:t)$, leading to an overall complexity of $O(T^4)$, which is prohibitive.
+
+$$\text{Total Cost} = \sum_{t=1}^T \sum_{s=0}^{t-1} \left( Q_s + C(y_{s+1}:t) + \beta \right)$$
+$$\text{Total Complexity} = \sum_{t=1}^T \sum_{s=0}^{t-1} O((t-s)^2)\approx O(T^4)$$
+
+Change-Point Detection Procedure:
+
+The detection algorithm follows four main steps:
+(1) Pre-Calculation: Pre-calculate the cost for every segment [i,j] (which yields an n×n matrix C).
+(2) Dynamic Programming: Use dynamic programming to find the optimal segmentation that minimizes the total cost for each number of segments, D=1,…,D max
+(3) Penalty Application: Apply a penalty term, penalty(D), to the empirical risk: crit(D)=empirical_risk(D)+penalty(D).
+(4) Model Selection: Select the optimal number of segments D_hat, by finding the minimum of crit(D), along with the corresponding breakpoints.
+
+
+## Code simple: one change (for test the functions)
+#one dim
+#rbf&linear
+```{r}
+set.seed(2025)
+
+## -------------------------
+## 1. Data Generation
+## -------------------------
+
+n1 <- 150
+n2 <- 200
+n3 <- 180
+
+# Segment 1: N(0,1)
+x1 <- rnorm(n1, mean = 0, sd = 1)
+# Segment 2: N(2,1) -- Mean change
+x2 <- rnorm(n2, mean = 2, sd = 1)
+# Segment 3: Scaled t(3) -- Distribution/shape change
+x3_raw <- rt(n3, df = 3)
+x3 <- x3_raw / sqrt(3) 
+
+# Combine into a vector/matrix (n × 1)
+x <- c(x1, x2, x3)
+Xmat <- cbind(x)
+
+n <- length(x)
+true_cp1 <- n1
+true_cp2 <- n1 + n2
+
+## -------------------------
+## 2. Run kernel_change_point()
+## -------------------------
+
+# RBF Kernel
+res_rbf <- kernel_change_point(Xmat, kernel = "rbf", Dmax = 10, C = 2, verbose = FALSE)
+# Linear Kernel
+res_lin <- kernel_change_point(Xmat, kernel = "linear", Dmax = 10, C = 2, verbose = FALSE)
+
+## Print Results
+message("\n--- RBF Kernel Results ---")
+print(paste("Estimated K (D_hat):", res_rbf$D_hat))
+print(paste("Change Points (RBF):", paste(res_rbf$change_points, collapse = ", ")))
+
+message("\n--- Linear Kernel Results ---")
+print(paste("Estimated K (D_hat):", res_lin$D_hat))
+print(paste("Change Points (Linear):", paste(res_lin$change_points, collapse = ", ")))
+print(paste("True Change Points:", true_cp1, ",", true_cp2))
+
+
+## -------------------------
+## 3. Kernel Matrix Plot (RBF vs Linear)
+## -------------------------
+
+
+p_rbf <- annotate_kernel_matrix(
+  res_rbf$K, res_rbf$change_points,
+  main = "RBF Kernel Matrix" # Simplified title
+)
+
+p_lin <- annotate_kernel_matrix(
+  res_lin$K, res_lin$change_points,
+  main = "Linear Kernel Matrix" # Simplified title
+)
+
+gridExtra::grid.arrange(p_rbf, p_lin, ncol = 2)
+
+
+## -------------------------
+## 4. Signal + CPs Plot (RBF vs Linear)
+## -------------------------
+
+par(mfrow = c(1, 2))
+
+# Left: RBF Signal
+plot_kcp_signal(x, res_rbf,
+                main = "Signal + CPs (RBF Kernel)")
+abline(v = true_cp1, col = "blue", lty = 3, lwd = 2)
+abline(v = true_cp2, col = "blue", lty = 3, lwd = 2)
+legend("topleft",
+       legend = c("Estimated CP (RBF)", "True CP"),
+       col    = c("red", "blue"),
+       lty    = c(2, 3),
+       bty    = "n")
+
+# Right: Linear Signal
+plot_kcp_signal(x, res_lin,
+                main = "Signal + CPs (Linear Kernel)")
+abline(v = true_cp1, col = "blue", lty = 3, lwd = 2)
+abline(v = true_cp2, col = "blue", lty = 3, lwd = 2)
+legend("topleft",
+       legend = c("Estimated CP (Linear)", "True CP"),
+       col    = c("red", "blue"),
+       lty    = c(2, 3),
+       bty    = "n")
+
+par(mfrow = c(1, 1)) # Reset layout after signal plot
+
+
+## -------------------------
+## 5. Criterion vs D Plot (RBF vs Linear)
+## -------------------------
+
+par(mfrow = c(1, 2))
+
+# Left: RBF Criterion
+plot_kcp_crit(res_rbf,
+              main = "Criterion vs D (RBF Kernel)")
+abline(v = 3, col = "blue", lty = 3)
+legend("topright",
+       legend = c("D_hat (RBF)", "True D"),
+       col    = c("red", "blue"),
+       lty    = c(2, 3),
+       bty    = "n")
+
+# Right: Linear Criterion
+plot_kcp_crit(res_lin,
+              main = "Criterion vs D (Linear Kernel)")
+abline(v = 3, col = "blue", lty = 3)
+legend("topright",
+       legend = c("D_hat (Linear)", "True D"),
+       col    = c("red", "blue"),
+       lty    = c(2, 3),
+       bty    = "n")
+
+par(mfrow = c(1, 1)) # Final reset
+```
+
+## Real Code: Finance (Return of CAC 40)
+
+
+# Data Loading and Cleaning
+```{r}
+data_france <- read.csv("France.csv", header = TRUE, stringsAsFactors = FALSE)
+
+# Assume the price column name is 'Price'
+price_column_name <- "Price" 
+
+# Check if the column exists
+if (!(price_column_name %in% names(data_france))) {
+    stop(paste("ERROR: Column name '", price_column_name, "' not found in CSV.", sep=""))
+}
+
+# 1. Cleaning: Remove thousands separator (comma)
+price_raw_clean <- gsub(",", "", data_france[[price_column_name]])
+price_raw_clean <- trimws(price_raw_clean) # Remove surrounding whitespace
+
+# 2. Convert to numeric
+price_series_raw <- as.numeric(price_raw_clean)
+
+# 3. Remove NA (due to missing values or failed conversion)
+price_series_clean <- price_series_raw[!is.na(price_series_raw)]
+
+# --- 4. Trim data to target length ---
+T_target <- 200
+if (length(price_series_clean) > T_target) {
+    price_series <- price_series_clean[1:T_target]
+    message(paste("Data successfully loaded and trimmed to T =", length(price_series), "data points."))
+} else {
+    price_series <- price_series_clean
+    message(paste("Using full data length T =", length(price_series), "data points."))
+}
+
+# --- 5. Final check for empty series ---
+if (length(price_series) == 0) {
+    stop("ERROR: The processed price_series vector is empty. Check your CSV file for data quality.")
+}
+
+# --- 6. Initial Visualization ---
+plot(price_series, type = 'l', 
+     main = paste("France Price Series (T=", length(price_series), ")"),
+     xlab = "Time Index", 
+     ylab = "Price Value")
+```
+#one dim
+#Kernel Change-Point Detection: rbf&linear
+```{r}
+# Convert price_series to n x 1 matrix
+Xmat <- cbind(price_series)
+n <- length(price_series)
+Dmax_kcp <- min(100, n)
+
+# 1) RBF Kernel Detection
+res_rbf <- kernel_change_point(
+  x       = Xmat,
+  kernel  = "rbf",
+  Dmax    = Dmax_kcp,
+  C       = 2, 
+  verbose = FALSE # Set to FALSE for cleaner Rmd output
+)
+
+# 2) Linear Kernel Detection
+res_lin <- kernel_change_point(
+  x       = Xmat,
+  kernel  = "linear",
+  Dmax    = Dmax_kcp,
+  C       = 2, 
+  verbose = FALSE
+)
+
+## Print Results (Consistent with Simulation)
+message("\n--- RBF Kernel Results (Real Data) ---")
+print(paste("Estimated K (D_hat):", res_rbf$D_hat))
+print(paste("Change Points (RBF):", paste(res_rbf$change_points, collapse = ", ")))
+
+message("\n--- Linear Kernel Results (Real Data) ---")
+print(paste("Estimated K (D_hat):", res_lin$D_hat))
+print(paste("Change Points (Linear):", paste(res_lin$change_points, collapse = ", ")))
+
+
+# ================== Plotting Results ==================
+
+# Kernel Matrix Plot (RBF vs Linear)
+
+p_rbf <- annotate_kernel_matrix(
+  res_rbf$K, res_rbf$change_points,
+  main = "RBF Kernel Matrix (France Price)" # Simplified title
+)
+
+p_lin <- annotate_kernel_matrix(
+  res_lin$K, res_lin$change_points,
+  main = "Linear Kernel Matrix (France Price)" # Simplified title
+)
+
+gridExtra::grid.arrange(p_rbf, p_lin, ncol = 2)
+
+
+# Signal + CPs Plot (RBF vs Linear)
+par(mfrow = c(1, 2))
+
+# Left: RBF Signal
+plot_kcp_signal(price_series, res_rbf,
+                main = "Signal + CPs (RBF Kernel)")
+legend("topleft",
+       legend = c("Estimated CP (RBF)"),
+       col    = c("red"),
+       lty    = c(2),
+       bty    = "n")
+
+# Right: Linear Signal
+plot_kcp_signal(price_series, res_lin,
+                main = "Signal + CPs (Linear Kernel)")
+legend("topleft",
+       legend = c("Estimated CP (Linear)"),
+       col    = c("red"),
+       lty    = c(2),
+       bty    = "n")
+
+par(mfrow = c(1, 1)) # Reset layout
+
+
+# Criterion vs D Plot (RBF vs Linear)
+par(mfrow = c(1, 2))
+
+# Left: RBF Criterion
+plot_kcp_crit(res_rbf,
+              main = "Criterion vs D (RBF Kernel)")
+abline(v = res_rbf$D_hat, col = "red", lty = 2) # Highlight D_hat
+legend("topright",
+       legend = c("D_hat (RBF)"),
+       col    = c("red"),
+       lty    = c(2),
+       bty    = "n")
+
+# Right: Linear Criterion
+plot_kcp_crit(res_lin,
+              main = "Criterion vs D (Linear Kernel)")
+abline(v = res_lin$D_hat, col = "red", lty = 2) # Highlight D_hat
+legend("topright",
+       legend = c("D_hat (Linear)"),
+       col    = c("red"),
+       lty    = c(2),
+       bty    = "n")
+
+par(mfrow = c(1, 1)) # Final reset
+```
+We compare the change-point results of this financial data for solution 1 and solution 2. Conclusion:
+
+1. Advantages of RKHS Methods (Sensitivity to Higher-Order Moments)
+RKHS (kernel) methods can, through the kernel trick, sensitively capture changes in higher-order moments of financial time series (such as volatility, skewness, and kurtosis). This is particularly important for financial data, because although the mean of financial time series may remain stable, their volatility can change dramatically with market conditions (e.g., during panic or bull markets).
+
+2. Limitations of Mean-Based Methods
+Change-point detection methods based on the mean have the lowest sensitivity. They ignore structural changes that affect the shape of the distribution but not the local mean, and therefore tend to miss important volatility change points in the financial domain.
+
+3. Potential Problems of RKHS Methods (Over-Segmentation)
+RKHS methods may be overly sensitive, easily detecting small and short-lived changes in the distribution, which can result in over-segmentation. In practical applications, it is necessary to tune the penalty term to balance model complexity, in order to identify change points that have stronger statistical or economic significance.
+
+
+## Real Code: Soybean
+
+Target: The purpose of the dataset is to diagnose the 19 different diseases or damage types suffered by soybean plants based on various plant attributes (such as the state of leaves, stems, roots, and weather conditions).
+
+Features: The 35 original features (variables) are almost all categorical variables (e.g., time-of-emergence, plant-stand, precip, etc.), meaning each feature represents several different states or levels.
+
+The process first prepares the data by sorting it by class label to create 18 distinct change points and safely converting all factor features to numeric. It then applies two kernel methods: the RBF Kernel (standardized Euclidean distance) and the Intersection Kernel (histogram overlap). Finally, it evaluates the performance by calculating the simplified Recall (Accuracy) of detected change points against the 18 true boundaries, using a tolerance threshold of $\pm 5$ observations, and outputs comparative visualizations (plots of segmentation, kernel matrices, and criterion curves).
+
+# high dim
+# Kernel Change-Point Detection: rbf & intercept
+
+#Data Loading and Preprocessing
+```{r}
+# Full Dataset (n=683) ---
+data(Soybean)
+Soybean_full <- Soybean %>% 
+  arrange(Class) # Sort by Class to enforce class boundaries as CPs
+
+n <- nrow(Soybean_full) # n = 683
+labels <- Soybean_full$Class
+Time <- 1:n
+
+# Extract features and convert factors to numeric safely
+X_temp <- Soybean_full %>% select(-Class)
+X_numeric <- X_temp %>% 
+  mutate(across(everything(), as.numeric)) %>% 
+  as.matrix()
+X_numeric[is.na(X_numeric)] <- 0
+cat("Data Dimension (Rows x Columns):\n")
+print(dim(X_numeric))
+```
+#Data Dimension:683*35
+```{r}
+# --- 1. Kernel Matrix Preparation (Input Data Scaling) ---
+
+# RBF Kernel (Standardized input)
+X_rbf <- scale(X_numeric)
+
+# Intersection Kernel (Normalized / Histogram input)
+X_inter <- apply(X_numeric, 1, function(v) {
+  s <- sum(v)
+  if (s == 0) return(rep(0, length(v)))
+  v / s
+})
+X_inter <- t(X_inter)
+
+# --- 2. Change-Point Detection: Model Fitting ---
+
+Dmax_val <- 30 # Max number of segments
+C_val <- 2 # Penalty constant
+
+# RBF Kernel Detection
+res_rbf <- kernel_change_point( # 1)
+  X_rbf, kernel="rbf", Dmax=Dmax_val, C=C_val, verbose = FALSE
+)
+
+# Intersection Kernel Detection
+res_inter <- kernel_change_point( # 2)
+  X_inter, kernel="intersection", Dmax=Dmax_val, C=C_val, verbose = FALSE
+)
+
+# --- 3. True Change-Point Calculation and Metrics Setup ---
+
+# Calculate true CPs (where class label changes)
+true_change_points_indices <- labels %>%
+  as.factor() %>%
+  as.numeric() %>%
+  diff() %>%
+  {. != 0} %>%
+  which()
+
+T_star <- as.numeric(true_change_points_indices + 1) # True observation indices
+num_true_points <- length(T_star)
+
+# Detected points
+T_rbf <- as.numeric(res_rbf$change_points)
+T_inter <- as.numeric(res_inter$change_points)
+
+# Accuracy Calculation (Simplified Recall)
+THRESHOLD <- 5
+
+matches_RBF <- calculate_matches(T_rbf, T_star, THRESHOLD)
+matches_Intersection <- calculate_matches(T_inter, T_star, THRESHOLD)
+
+recall_RBF <- matches_RBF / num_true_points
+recall_Intersection <- matches_Intersection / num_true_points
+
+
+## Print Results (Consistent with Simulation)
+cat("--- True Change-Point Output ---\n")
+cat(paste("Total True Change Points:", num_true_points, "\n"))
+cat("True Change-Point Indices (t=1 to 683):", paste(T_star, collapse = ", "), "\n")
+
+cat("\n--- RBF Kernel Results (p=35) ---\n")
+print(paste("Estimated K (D_hat):", res_rbf$D_hat))
+print(paste("Change Points (RBF):", paste(T_rbf, collapse = ", ")))
+cat(paste("Accuracy (Recall @ Threshold=", THRESHOLD, "):", round(recall_RBF * 100, 2), "%\n"))
+
+cat("\n--- Intersection Kernel Results (p=35) ---\n")
+print(paste("Estimated K (D_hat):", res_inter$D_hat))
+print(paste("Change Points (Intersection):", paste(T_inter, collapse = ", ")))
+cat(paste("Accuracy (Recall @ Threshold=", THRESHOLD, "):", round(recall_Intersection * 100, 2), "%\n"))
+
+
+# --- 4. Plotting Output ---
+
+# 4.1 True Class Sequence Plot (Reproducing the visual style of image_000ac1.png)
+labels_df <- data.frame(Time = Time, Class = labels)
+
+p_labels_full <- ggplot(labels_df, aes(x = Time, y = Class, color = Class)) +
+  geom_point(size = 1) +
+  # Overlay: True Change Points (Red Dashed, Thicker)
+  geom_vline(xintercept = T_star, linetype = "dashed", color = "red", size = 1.5, alpha = 0.8) +
+  # Overlay: RBF Detected Points (Blue Solid)
+  geom_vline(xintercept = T_rbf, linetype = "solid", color = "blue", size = 0.8, alpha = 0.8) +
+  # Overlay: Intersection Detected Points (Purple Longdash)
+  geom_vline(xintercept = T_inter, linetype = "longdash", color = "green", size = 0.8, alpha = 0.8) +
+  labs(
+    title = paste("Soybean (n=", n, ", p=35)"),
+    subtitle = "Red Dashed=True (Thick) | Blue Solid=RBF | Green Longdash=Intersection",
+    x = paste("Observation Index (Time, n=1 to", n, ", Sorted by Class)"),
+    y = "True Class"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none",
+        axis.text.y = element_text(size = 8)) 
+
+print(p_labels_full) # Display the new plot
+
+# 4.2 Kernel Matrix Plot Comparison
+p1 <- annotate_kernel_matrix(res_rbf$K, res_rbf$change_points,
+                             main="RBF Kernel Matrix (Soybean, p=35)")
+p2 <- annotate_kernel_matrix(res_inter$K, res_inter$change_points,
+                             main="Intersection Kernel Matrix (Soybean, p=35)")
+
+gridExtra::grid.arrange(p1, p2, ncol=2)
+
+
+# --- 4.3 True Class Sequence Plot (Signal + Detected CPs) ---
+# Note: This plot uses base R graphics (plot, abline, par)
+
+labels_df <- data.frame(Time = Time, Class = labels)
+
+# Set 1x2 layout for base R plots
+par(mfrow = c(1, 2))
+
+# --- Left: RBF Detected CPs ---
+plot(Time, as.numeric(labels), type = 'p', pch = 20, col = as.numeric(labels),
+     main = "True vs RBF Kernel", # Simplified Title
+     xlab = "Observation Index",
+     ylab = "True Class (Index)")
+# True CPs (Red Dashed, Thicker)
+abline(v = T_star, lty = 2, col = "red", lwd = 2.5) 
+# RBF Detected CPs (Blue Solid, Thicker)
+abline(v = T_rbf, lty = 1, col = "blue", lwd = 1.5) 
+legend("topleft",
+       legend = c("True CP", "Estimated CP (RBF)"),
+       col    = c("red", "blue"),
+       lty    = c(2, 1), # Dashed vs Solid
+       lwd    = c(2.5, 1.5),
+       bty    = "n")
+
+# --- Right: Intersection Detected CPs ---
+plot(Time, as.numeric(labels), type = 'p', pch = 20, col = as.numeric(labels),
+     main = "True vs Intersection Kernel", # Simplified Title
+     xlab = "Observation Index",
+     ylab = "True Class (Index)")
+# True CPs (Red Dashed, Thicker)
+abline(v = T_star, lty = 2, col = "red", lwd = 2.5)
+# Intersection Detected CPs (Purple Longdash)
+abline(v = T_inter, lty = 5, col = "green", lwd = 1.5) # lty=5 is longdash
+legend("topleft",
+       legend = c("True CP", "Estimated CP (Intersection)"),
+       col    = c("red", "green"),
+       lty    = c(2, 5), # Dashed vs Longdash
+       lwd    = c(2.5, 1.5),
+       bty    = "n")
+
+par(mfrow = c(1, 1)) # Reset layout after signal plot
+
+
+# 4.4 Criterion vs D Plot Comparison
+par(mfrow=c(1,2))
+
+# Left: RBF Criterion
+plot_kcp_crit(res_rbf, main="RBF Kernel Criterion")
+abline(v = res_rbf$D_hat, col = "red", lty = 2)
+legend("topright", legend = "D_hat (RBF)", col = "red", lty = 2, bty = "n")
+
+# Right: Intersection Criterion
+plot_kcp_crit(res_inter, main="Intersection Kernel Criterion")
+abline(v = res_inter$D_hat, col = "red", lty = 2)
+legend("topright", legend = "D_hat (Intersection)", col = "red", lty = 2, bty = "n")
+
+par(mfrow=c(1,1)) # Final reset
+```
+##Comparaison
+#Data Dimension
+#n=seq(150, 650, by = 25)
+#High-dimensional features:By performing second-order/third-order polynomial expansion on the original 35 features, high-dimensional features were obtained: 665/7175
+
+#We will calculate the changes in the accuracy rates of the two kernel partitions for different numbers of features under different values of n.
+
+
+```{r}
+# --- Define Constants and Full Data ---
+data(Soybean) 
+Soybean_data <- Soybean
+N_FULL <- nrow(Soybean_data)
+Dmax_val <- 20
+C_val <- 2
+THRESHOLD <- 5
+N_VALUES <- seq(150, 650, by = 50)
+
+# --- Define Core Analysis Function (Must be run once) ---
+# NOTE: This function assumes kernel_change_point and calculate_matches are available globally.
+run_analysis_for_N <- function(N_target, Soybean_data, formula_p) {
+  
+  if (N_target > N_FULL) {
+    message(paste("Skipping N=", N_target, " as it exceeds full sample size (", N_FULL, ")"))
+    return(NULL)
+  }
+  
+  # 1. Data Subsetting and Feature Engineering
+  Soybean_sample <- Soybean_data[1:N_target, ]
+  Soybean_sample <- Soybean_sample %>% arrange(Class)
+  
+  labels <- Soybean_sample$Class
+  X_temp <- Soybean_sample %>% select(-Class)
+  
+  X_temp_numeric <- X_temp %>% mutate(across(everything(), as.numeric))
+  X_temp_numeric[is.na(X_temp_numeric)] <- 0
+  
+  X_high_dim <- model.matrix(formula_p, data = X_temp_numeric)
+  X_final <- as.matrix(X_high_dim[, -1])
+  p <- ncol(X_final)
+  
+  # 2. Kernel Preparation
+  X_rbf <- scale(X_final)
+  X_inter <- t(apply(abs(X_final), 1, function(v) { 
+    s <- sum(v)
+    if (s == 0) return(rep(0, length(v)))
+    v / s
+  }))
+  
+  # 3. Detection and Metrics
+  res_rbf <- kernel_change_point(X_rbf, kernel="rbf", Dmax=Dmax_val, C=C_val, verbose = FALSE)
+  res_inter <- kernel_change_point(X_inter, kernel="intersection", Dmax=Dmax_val, C=C_val, verbose = FALSE)
+  
+  true_change_points_indices <- labels %>% as.factor() %>% as.numeric() %>% diff() %>% {. != 0} %>% which()
+  T_star <- as.numeric(true_change_points_indices)
+  num_true_points <- length(T_star)
+  
+  T_rbf <- as.numeric(res_rbf$change_points)
+  T_inter <- as.numeric(res_inter$change_points)
+  
+  if (num_true_points == 0) {
+    recall_RBF = NA; recall_Intersection = NA
+  } else {
+    recall_RBF <- calculate_matches(T_rbf, T_star, THRESHOLD) / num_true_points
+    recall_Intersection <- calculate_matches(T_inter, T_star, THRESHOLD) / num_true_points
+  }
+  
+  return(data.frame(N = N_target, P = p, Recall_RBF = recall_RBF, Recall_Intersection = recall_Intersection))
+}
+
+
+# --- 1. EXPERIMENT DEFINITIONS ---
+experiments <- list(
+  list(formula_p = formula(~ .), title = "Original Features (P ~ 35)", name = "P35")
+  #list(formula_p = formula(~ .^2), title = "Quadratic Expansion (P ~ 665)", name = "P665")
+  #list(formula_p = formula(~ .^3), title = "Cubic Expansion (P ~ 7175)", name = "P7K")
+)
+#Dans le ppt, il y a p=665 et 7175
+
+# --- 2. MAIN EXECUTION LOOP AND PLOTTING ---
+all_results <- list()
+
+for (exp in experiments) {
+  
+  cat(paste0("\n\n--- Running Experiment: ", exp$title, " ---\n"))
+  
+  results_list_exp <- list()
+  for (N_val in N_VALUES) {
+    result <- run_analysis_for_N(N_val, Soybean_data, exp$formula_p)
+    if (!is.null(result)) {
+      results_list_exp[[as.character(N_val)]] <- result
+    }
+  }
+  
+  results_df_exp <- do.call(rbind, results_list_exp)
+  
+  if (nrow(results_df_exp) > 0) {
+    P_val <- results_df_exp$P[1]
+    
+    # Store all results together (optional, for later full analysis)
+    results_df_exp$Experiment <- exp$name
+    all_results[[exp$name]] <- results_df_exp
+    
+    # Plotting for current experiment
+    results_long_exp <- results_df_exp %>%
+      tidyr::pivot_longer(cols = starts_with("Recall"), names_to = "Kernel", values_to = "Recall") %>%
+      mutate(Kernel = gsub("Recall_", "", Kernel))
+    
+    p <- ggplot(results_long_exp, aes(x = N, y = Recall, color = Kernel, group = Kernel)) +
+      geom_line(size = 1) + geom_point(size = 3) +
+      labs(
+        title = paste("Accuracy vs. Sample Size N (", exp$title, ")"),
+        x = "Sample Size (N)", y = "Accuracy (Recall)"
+      ) +
+      scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+      theme_minimal(base_size = 14)
+    
+    print(p)
+  }
+}
+```
+
+
+Result:
+
+At $P = 35$, the results are 15 wins, 2 losses, and 3 draws;\\
+at $P = 665$, there are 10 wins, 7 losses, and 3 draws;\\
+at $P = 7175$, there are 8 wins, 7 losses, and 5 draws.
+
+The intersection kernel has a structural advantage because it is specifically designed for handling categorical data. The RBF kernel has stronger nonlinear expressive power, and its accuracy gradually increases as nonlinear features become more prominent.
+
+
+
+**Solution 3: change in RKHS low rank**
+
+By using Low-Rank Approximation, the segment cost can be reduced to $O(m)$ (where $m$ is the rank) after an $O(T^2)$ pre-computation. This brings the overall DP complexity back to $O(m \cdot T^2)$. 
+
+#Preparation of data: 
+```{r}
+# --- 1. Data Loading and Preprocessing (Soybean n=200, p~7175) ---
+
+data(Soybean)
+Soybean_data <- Soybean
+
+# Truncate to the first 200 continuous observations
+Soybean_sample <- Soybean_data[1:200, ]
+
+# Re-sort by Class label
+Soybean_sample <- Soybean_sample %>% arrange(Class)
+
+n <- nrow(Soybean_sample) # n = 200
+labels <- Soybean_sample$Class
+
+# Extract raw features for engineering
+X_temp <- Soybean_sample %>% select(-Class)
+
+# --- 2. Feature Engineering: Third-degree Polynomial Expansion ---
+
+X_temp_numeric <- X_temp %>% mutate(across(everything(), as.numeric))
+X_temp_numeric[is.na(X_temp_numeric)] <- 0
+
+formula_p_high <- formula(~ .^3)
+X_high_dim <- model.matrix(formula_p_high, data = X_temp_numeric)
+
+X_final <- as.matrix(X_high_dim[, -1])
+p <- ncol(X_final) # p ~ 7175
+
+# --- 3. Final Required Variables for Low-Rank Sweep ---
+
+# 3.1 RBF Kernel Input (Standardized)
+X_rbf_high_p <- scale(X_final) 
+
+# 3.2 True Change Points Calculation
+true_change_points_indices <- labels %>% as.factor() %>% as.numeric() %>% diff() %>% {. != 0} %>% which()
+T_star <- as.numeric(true_change_points_indices)
+num_true_points <- length(T_star)
+
+# 3.3 Set Parameters
+THRESHOLD <- 5
+D_max_value <- 20
+
+# 3.4 Assign final matrix to X_data
+X_data <- X_rbf_high_p
+N <- nrow(X_data)
+
+
+cat("--- Low-Rank Sweep Variables Ready ---\n")
+cat(paste("X_data (RBF Input) created (N=", N, ", P=", p, ")\n"))
+cat(paste("True CPs (T_star):", num_true_points, "\n"))
+```
+
+
+```{r}
+# ----------------------------------------------
+# 0. Initialization and Parameter Settings
+# ----------------------------------------------
+
+X_data <- X_rbf_high_p
+N <- nrow(X_data)
+D_max_value <- 20       # Dmax remains fixed
+N_RUNS <- 5            # Number of repetitions: recommend at least 10 for stable SD
+# Values of L: 5, 15, 25, ..., 45
+L_VALUES <- seq(5, 45, by = 10) 
+
+# Structure to store results
+results_df <- data.frame(
+    L = integer(),
+    Mean_Time_Full = numeric(),
+    SD_Time_Full = numeric(),
+    Mean_Recall_Full = numeric(),
+    SD_Recall_Full = numeric(),
+    Mean_Time_Low = numeric(),
+    SD_Time_Low = numeric(),
+    Mean_Recall_Low = numeric(),
+    SD_Recall_Low = numeric()
+)
+
+# ----------------------------------------------
+# 1. Loop over L to perform comparisons and collect data
+# ----------------------------------------------
+
+cat("\n================ Starting L-Value Sweep ==================\n")
+
+for (L in L_VALUES) {
+    cat(sprintf("--- Running Comparison for Low Rank L = %d ---\n", L))
+
+    # Initialize storage for current L
+    times_full <- numeric(N_RUNS)
+    times_low <- numeric(N_RUNS)
+    recalls_full <- numeric(N_RUNS)
+    recalls_low <- numeric(N_RUNS)
+
+    # Repeat N_RUNS times
+    for (i in 1:N_RUNS) {
+        
+        # --- Full Rank Version ---
+        time_full_rbf <- system.time({
+            # Full rank call: rank = NULL
+            res_full_rbf <- kernel_change_point(X_data, kernel = "rbf", Dmax = D_max_value, verbose = FALSE, rank = NULL) 
+        })
+        times_full[i] <- time_full_rbf['elapsed']
+        T_full <- as.numeric(res_full_rbf$change_points)
+        recalls_full[i] <- calculate_matches(T_full, T_star, THRESHOLD) / num_true_points
+
+        # --- Low Rank Version ---
+        time_low_rbf <- system.time({
+            # Low rank call: set rank = L
+            res_low_rbf <- kernel_change_point(X_data, kernel = "rbf", Dmax = D_max_value, verbose = FALSE, rank = L)
+        })
+        times_low[i] <- time_low_rbf['elapsed']
+        T_low <- as.numeric(res_low_rbf$change_points)
+        recalls_low[i] <- calculate_matches(T_low, T_star, THRESHOLD) / num_true_points
+    }
+
+    # 4. Compute mean and standard deviation, store results
+    new_row <- data.frame(
+        L = L,
+        Mean_Time_Full = mean(times_full),
+        SD_Time_Full = sd(times_full),
+        Mean_Recall_Full = mean(recalls_full),
+        SD_Recall_Full = sd(recalls_full),
+        Mean_Time_Low = mean(times_low),
+        SD_Time_Low = sd(times_low),
+        Mean_Recall_Low = mean(recalls_low),
+        SD_Recall_Low = sd(recalls_low)
+    )
+    results_df <- rbind(results_df, new_row)
+}
+
+cat("==================== L-Value Sweep Finished ====================\n")
+print(results_df) # Print results table
+
+
+# ----------------------------------------------
+# 2. Plot (Recall rate vs L)
+# ----------------------------------------------
+
+# Convert results to percentage
+results_df$Mean_Recall_Full_Perc <- results_df$Mean_Recall_Full * 100
+results_df$Mean_Recall_Low_Perc <- results_df$Mean_Recall_Low * 100
+results_df$SD_Recall_Low_Perc <- results_df$SD_Recall_Low * 100
+
+# Open a new plot window or set layout
+if (!is.null(dev.list())) {
+    dev.off()
+}
+par(mfrow = c(1, 2), mar = c(4, 4, 3, 1)) # 1 row, 2 columns layout
+
+# --- Plot 1: L vs Recall Rate ---
+plot(
+    results_df$L,
+    results_df$Mean_Recall_Low_Perc,
+    type = "b",
+    pch = 19,
+    col = "blue",
+    ylim = c(min(results_df$Mean_Recall_Low_Perc) * 0.9, max(results_df$Mean_Recall_Full_Perc) * 1.05),
+    xlab = "Low Rank L",
+    ylab = "Average Recall Rate (%)",
+    main = "Recall Rate vs Low Rank L"
+)
+
+# Add error bars for low-rank results
+arrows(
+    results_df$L,
+    results_df$Mean_Recall_Low_Perc - results_df$SD_Recall_Low_Perc,
+    results_df$L,
+    results_df$Mean_Recall_Low_Perc + results_df$SD_Recall_Low_Perc,
+    length = 0.05, angle = 90, code = 3, col = "blue"
+)
+
+# Add full-rank recall reference line
+full_recall_ref <- results_df$Mean_Recall_Full_Perc[1]
+abline(
+    h = full_recall_ref,
+    col = "red",
+    lty = 2
+)
+points(
+    results_df$L,
+    rep(full_recall_ref, length(results_df$L)),
+    pch = 4, # Cross for full rank
+    col = "red"
+)
+
+# Add legend
+legend(
+    "bottomright",
+    legend = c("Low Rank Recall", "Full Rank Recall (Ref)"),
+    col = c("blue", "red"),
+    pch = c(19, 4),
+    lty = c(1, 2),
+    bty = "n"
+)
+
+# ----------------------------------------------
+# 3. Plot (Running Time vs L)
+# ----------------------------------------------
+
+# --- Plot 2: L vs Running Time ---
+plot(
+    results_df$L,
+    results_df$Mean_Time_Low,
+    type = "b",
+    pch = 19,
+    col = "darkgreen",
+    ylim = c(min(results_df$Mean_Time_Low) * 0.9, max(results_df$Mean_Time_Full) * 1.1),
+    xlab = "Low Rank L",
+    ylab = "Average Elapsed Time (seconds)",
+    main = "Running Time vs Low Rank L"
+)
+
+# Add error bars for low-rank results
+arrows(
+    results_df$L,
+    results_df$Mean_Time_Low - results_df$SD_Time_Low,
+    results_df$L,
+    results_df$Mean_Time_Low + results_df$SD_Time_Low,
+    length = 0.05, angle = 90, code = 3, col = "darkgreen"
+)
+
+# Add full-rank average time reference line
+full_time_ref <- results_df$Mean_Time_Full[1]
+abline(
+    h = full_time_ref,
+    col = "orange",
+    lty = 2
+)
+points(
+    results_df$L,
+    rep(full_time_ref, length(results_df$L)),
+    pch = 8, # Star for full rank
+    col = "orange"
+)
+
+# Add legend
+legend(
+    "topright",
+    legend = c("Low Rank Time", "Full Rank Time (Ref)"),
+    col = c("darkgreen", "orange"),
+    pch = c(19, 8),
+    lty = c(1, 2),
+    bty = "n"
+)
+
+# Restore default plot layout
+par(mfrow = c(1, 1))
+
+```
+
+# Comparaison des temps d'execution entre R et C++
+
+```{r}
+#utilisation de la fonction R
+run_R_version <- function(X, kernel = "rbf", Dmax = 50, C = 2, rank = -1, verbose = FALSE) {
+  kernel_change_point(
+    x       = X,
+    kernel  = kernel,
+    Dmax    = Dmax,
+    C       = C,
+    rank    = rank,
+    verbose = verbose
+  )
+}
+
+#utilisation de la fonction C++
+run_CPP_version <- function(X, kernel = "rbf", Dmax = 50, C = 2, rank = -1, verbose = FALSE) {
+  kernel_change_point_cpp(
+    X       = X,
+    kernel  = kernel,
+    Dmax    = Dmax,
+    Cpen    = C,
+    rank    = rank,
+    verbose = verbose
+  )
+}
+
+```
+
+```{r}
+benchmark_once <- function(expr) {
+  as.numeric(system.time({res <- expr})["elapsed"])
+}
+```
+
+```{r}
+benchmark_compare <- function(X, kernel = "rbf", Dmax = 50, C = 2, rank = -1, runs = 10) {
+  
+  time_R   <- numeric(runs)
+  time_CPP <- numeric(runs)
+  
+  for (i in 1:runs) {
+    message(paste("Run", i, "/", runs))
+    
+    time_R[i] <- benchmark_once(
+      run_R_version(X, kernel = kernel, Dmax = Dmax, C = C, rank = rank, verbose = FALSE)
+    )
+    
+    time_CPP[i] <- benchmark_once(
+      run_CPP_version(X, kernel = kernel, Dmax = Dmax, C = C, rank = rank, verbose = FALSE)
+    )
+  }
+  data.frame(
+    Version = c("R", "C++"),
+    Mean_time = c(mean(time_R), mean(time_CPP)),
+    SD_time   = c(sd(time_R), sd(time_CPP))
+  )
+}
+
+```
+
+#compare les temps de run pour RKHS Full 
+```{r}
+data(Soybean)
+X <- Soybean %>% 
+       select(-Class) %>% 
+       mutate(across(everything(), as.numeric)) %>% 
+       as.matrix()
+
+X[is.na(X)] <- 0
+
+# Run benchmark
+results <- benchmark_compare(
+  X, 
+  kernel = "rbf",
+  Dmax = 20,
+  C = 2,
+  rank = -1,       # full-rank
+  runs = 10
+)
+
+print(results)
+
+```
+
+
+
+#compare les temps de run pour RKHS Low Rank
+```{r}
+#results_lowrank <- benchmark_compare(
+  #X,
+  #kernel = "rbf",
+  #Dmax = 20,
+  #C = 2,
+  #rank = 20,    # <----- low-rank here !
+  #runs = 10
+#)
+
+#print(results_lowrank)
+
+```
+
+```{r}
+
+data(Soybean)
+Soybean_data <- Soybean
+
+# --- 1. Définition des 3 "dimensions" de features ---
+experiments <- list(
+  list(
+    name      = "P35",
+    title     = "p = 35 (original features)",
+    formula_p = ~ .
+  )
+  #list( name = "P665", title= "p ≈ 665 (quadratic expansion)", formula_p =~ .^2
+  #,list(name = "P7175",title = "p ≈ 7175 (cubic expansion)",formula_p = ~ .^3)
+)
+
+N_FULL <- nrow(Soybean_data)  # 683
+
+# Grilles de n différentes selon la dimension p
+N_VALUES_LIST <- list(
+  P35   = seq(150, 650, by = 100)   # toutes les valeurs pour p = 35
+  #P665  = seq(150, 650, by = 100)    # seulement ces n pour p ≈ 665. 
+  #,P7175 = c(150,200,250,300, 350,400)          # seulement ces n pour p ≈ 7175
+)
+#Dans le ppt, il y a p=665 et 7175
+p_reps   <- 5        #dansle ppt,n=20
+nbCores  <- 8         # ajuste selon ta machine
+rank_low <- 20        # rang pour la low-rank (tu peux changer 10 / 20 / 30, etc.)
+
+# --- 2. Une simulation = un temps pour un (N, dimension, algo) ---
+one_simu_time_RKHS_soy <- function(i, N_target, formula_p, algo = c("rkhs_full", "rkhs_low")) {
+  algo <- match.arg(algo)
+  
+  # 1) Sous-échantillonnage + tri par classe
+  Soybean_sample <- Soybean_data[1:N_target, ] %>% 
+    arrange(Class)
+  
+  X_temp <- Soybean_sample %>% select(-Class)
+  
+  # 2) Passage en numérique + imputation 0
+  X_num <- X_temp %>% 
+    mutate(across(everything(), as.numeric))
+  X_num[is.na(X_num)] <- 0
+  
+  # 3) Expansion polynomiale (p ≈ 35 / 665 / 7175)
+  X_hd <- model.matrix(formula_p, data = X_num)
+  X_final <- as.matrix(X_hd[, -1, drop = FALSE])
+  
+  # 4) Normalisation pour noyau RBF
+  X_rbf <- scale(X_final)
+  
+  # 5) Mesure du temps pour l'algo choisi
+  start_time <- Sys.time()
+  
+  if (algo == "rkhs_full") {
+    kernel_change_point(
+      x       = X_rbf,
+      kernel  = "rbf",
+      Dmax    = 20,
+      C       = 2,
+      rank    = -1,      # rang complet
+      verbose = FALSE
+    )
+  } else if (algo == "rkhs_low") {
+    kernel_change_point(
+      x       = X_rbf,
+      kernel  = "rbf",
+      Dmax    = 20,
+      C       = 2,
+      rank    = rank_low, # low-rank
+      verbose = FALSE
+    )
+  }
+  
+  end_time <- Sys.time()
+  as.numeric(difftime(end_time, start_time, units = "secs"))
+}
+
+# --- 3. Lancer toutes les expériences ---
+
+# Nombre de cœurs disponibles
+if (.Platform$OS.type == "windows") {
+  nbCores <- 1L   # Windows : pas de mclapply -> on ne fera que du séquentiel
+} else {
+  nbCores <- max(1L, detectCores() - 1L)
+}
+
+# Wrapper : mclapply sur Unix/Mac, lapply sur Windows
+mc_or_lapply <- function(X, FUN, ..., mc.cores = nbCores) {
+  if (.Platform$OS.type == "windows" || mc.cores <= 1L) {
+    # Sur Windows (ou si mc.cores = 1) : fallback séquentiel
+    lapply(X, FUN, ...)
+  } else {
+    # Sur Mac/Linux : vrai parallélisme
+    parallel::mclapply(X, FUN, ..., mc.cores = mc.cores)
+  }
+}
+
+results_list <- list()
+
+for (exp in experiments) {
+  cat("\n=== Experiment", exp$name, ":", exp$title, "===\n")
+  
+  # Grille de n adaptée à cette expérience
+  N_VALUES <- N_VALUES_LIST[[exp$name]]
+  
+  for (N_target in N_VALUES) {
+    cat("  n =", N_target, "\n")
+    
+    for (algo in c("rkhs_full", "rkhs_low")) {
+      temps <- mc_or_lapply(
+        1:p_reps,
+        FUN       = one_simu_time_RKHS_soy,
+        N_target  = N_target,
+        formula_p = exp$formula_p,
+        algo      = algo,
+        mc.cores  = nbCores
+      )
+      
+      results_list[[length(results_list) + 1]] <- data.frame(
+        Experiment = exp$name,
+        P_title    = exp$title,
+        type       = algo,
+        n          = N_target,
+        time       = unlist(temps)
+      )
+    }
+  }
+}
+
+df_times <- bind_rows(results_list)
+str(df_times)
+
+# --- 4. Résumé (moyenne + intervalles) ---
+df_sum <- df_times %>%
+  group_by(Experiment, P_title, type, n) %>%
+  summarise(
+    value = mean(time),
+    q025  = quantile(time, 0.025),
+    q975  = quantile(time, 0.975),
+    .groups = "drop"
+  )
+
+# bornes min / max pour l’échelle log-log
+theMin <- min(df_sum$q025)
+theMax <- max(df_sum$q975)
+
+# --- 5. Plot log-log ---
+ggplot(df_sum, aes(x = n, y = value, col = type)) +
+  scale_x_log10() +
+  scale_y_log10(limits = c(theMin, theMax)) +
+  facet_wrap(~ P_title, nrow = 1) +
+  labs(
+    y = "time in seconds",
+    x = "series length n (Soybean)",
+    title = "Execution time vs n for RKHS methods (Soybean, different feature dimensions)"
+  ) +
+  geom_point(size = 2, aes(shape = type)) +
+  geom_errorbar(
+    aes(ymin = q025, ymax = q975),
+    width = 0.02
+  ) +
+  scale_colour_manual(values = c(
+    "rkhs_full" = "#ff7f0e",  # orange
+    "rkhs_low"  = "#d62728"   # rouge
+  )) +
+  theme_minimal() +
+  theme(
+    axis.text.x  = element_text(size = 13),
+    axis.text.y  = element_text(size = 13),
+    legend.text  = element_text(size = 13),
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    legend.position = c(0.8, 0.15),
+    legend.title = element_blank(),
+    strip.text = element_text(size = 13)
+  )
+
+```
+
+
+```{r}
+N_FULL <- nrow(Soybean_data)  # 683
+
+# Grille commune de n pour toutes les dimensions
+N_VALUES_ALL <- seq(150, 650, by = 100)#dans le ppt, N_VALUES_ALL <- seq(150, 650, by = 25)
+
+
+one_simu_time_RKHS_soy_cpp <- function(i, N_target, formula_p, algo = c("rkhs_full", "rkhs_low")) {
+  algo <- match.arg(algo)
+  
+  # 1) Sous-échantillonner + trier par classe
+  Soybean_sample <- Soybean_data[1:N_target, ] %>% 
+    arrange(Class)
+  
+  X_temp <- Soybean_sample %>% select(-Class)
+  
+  # 2) Passage en numérique + imputation 0
+  X_num <- X_temp %>% 
+    mutate(across(everything(), as.numeric))
+  X_num[is.na(X_num)] <- 0
+  
+  # 3) Expansion polynomiale (p ≈ 35 / 665 / 7175)
+  X_hd <- model.matrix(formula_p, data = X_num)
+  X_final <- as.matrix(X_hd[, -1, drop = FALSE])
+  
+  # 4) Normalisation pour noyau RBF
+  X_rbf <- scale(X_final)
+  
+  # 5) Mesure du temps pour l'algo choisi (C++)
+  start_time <- Sys.time()
+  
+  if (algo == "rkhs_full") {
+    kernel_change_point_cpp(
+      X       = X_rbf,
+      kernel  = "rbf",
+      Dmax    = 20,
+      Cpen    = 2,
+      rank    = -1,      # rang complet
+      verbose = FALSE
+    )
+  } else if (algo == "rkhs_low") {
+    kernel_change_point_cpp(
+      X       = X_rbf,
+      kernel  = "rbf",
+      Dmax    = 20,
+      Cpen    = 2,
+      rank    = rank_low, # low-rank
+      verbose = FALSE
+    )
+  }
+  
+  end_time <- Sys.time()
+  as.numeric(difftime(end_time, start_time, units = "secs"))
+}
+
+results_cpp_list <- list()
+
+for (exp in experiments) {
+  cat("\n=== Experiment", exp$name, ":", exp$title, " (C++) ===\n")
+  
+  # Même grille n pour tous
+  N_VALUES <- N_VALUES_ALL
+  
+  for (N_target in N_VALUES) {
+    cat("  n =", N_target, "\n")
+    
+    for (algo in c("rkhs_full", "rkhs_low")) {
+      temps <- mc_or_lapply(
+        1:p_reps,
+        FUN       = one_simu_time_RKHS_soy_cpp,
+        N_target  = N_target,
+        formula_p = exp$formula_p,
+        algo      = algo,
+        mc.cores  = nbCores
+      )
+      
+      results_cpp_list[[length(results_cpp_list) + 1]] <- data.frame(
+        Experiment = exp$name,
+        P_title    = exp$title,
+        type       = algo,
+        n          = N_target,
+        time       = unlist(temps)
+      )
+    }
+  }
+}
+
+df_times_cpp <- bind_rows(results_cpp_list)
+str(df_times_cpp)
+
+```
+
+
+```{r}
+df_sum_cpp <- df_times_cpp %>%
+  group_by(Experiment, P_title, type, n) %>%
+  summarise(
+    value = mean(time),
+    q025  = quantile(time, 0.025),
+    q975  = quantile(time, 0.975),
+    .groups = "drop"
+  )
+
+theMin_cpp <- min(df_sum_cpp$q025)
+theMax_cpp <- max(df_sum_cpp$q975)
+
+ggplot(df_sum_cpp, aes(x = n, y = value, col = type)) +
+  scale_x_log10() +
+  scale_y_log10(limits = c(theMin_cpp, theMax_cpp)) +
+  facet_wrap(~ P_title, nrow = 1) +
+  labs(
+    y = "time in seconds (C++ backend)",
+    x = "series length n (Soybean)",
+    title = "Execution time vs n for RKHS methods (Soybean, different feature dimensions, C++ implementation)"
+  ) +
+  geom_point(size = 2, aes(shape = type)) +
+  geom_errorbar(
+    aes(ymin = q025, ymax = q975),
+    width = 0.02
+  ) +
+  scale_colour_manual(values = c(
+    "rkhs_full" = "#ff7f0e",  # orange
+    "rkhs_low"  = "#d62728"   # rouge
+  )) +
+  theme_minimal() +
+  theme(
+    axis.text.x  = element_text(size = 13),
+    axis.text.y  = element_text(size = 13),
+    legend.text  = element_text(size = 13),
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    legend.position = c(0.8, 0.15),
+    legend.title = element_blank(),
+    strip.text = element_text(size = 13)
+  )
+
+```
+
+
+```{r}
+# On vérifie les valeurs de P_title (une par dimension p)
+unique(df_sum_cpp$P_title)
+
+# On récupère les niveaux (par ex. "p ≈ 35", "p ≈ 665", "p ≈ 7175")
+p_levels <- unique(df_sum_cpp$P_title)
+
+# Boucle sur chaque dimension p et chaque type (rkhs_full / rkhs_low)
+for (pt in p_levels) {
+  cat("\n\n=============================\n")
+  cat("Dimension :", pt, "\n")
+  cat("=============================\n")
+  
+  # --- RKHS FULL ---
+  cat("\n--- RKHS_FULL ---\n")
+  R_full <- df_sum_cpp[df_sum_cpp$type == "rkhs_full" &
+                         df_sum_cpp$P_title == pt, c("n", "value")]
+  
+  l_full <- lm(log(value) ~ log(n), data = R_full)
+  print(summary(l_full))
+  cat("\nCoefficients RKHS_FULL (intercept, log(n)) :\n")
+  print(l_full$coefficients)
+  
+  # --- RKHS LOW-RANK ---
+  cat("\n--- RKHS_LOW ---\n")
+  R_low <- df_sum_cpp[df_sum_cpp$type == "rkhs_low" &
+                        df_sum_cpp$P_title == pt, c("n", "value")]
+  
+  l_low <- lm(log(value) ~ log(n), data = R_low)
+  print(summary(l_low))
+  cat("\nCoefficients RKHS_LOW (intercept, log(n)) :\n")
+  print(l_low$coefficients)
+}
+
+```
+
